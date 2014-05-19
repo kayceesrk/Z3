@@ -1,16 +1,16 @@
 /*++
-Copyright (c) 2011 Microsoft Corporation
+  Copyright (c) 2011 Microsoft Corporation
 
-Module Name:
+  Module Name:
 
-    api_interp.cpp
+  api_interp.cpp
 
 Abstract:
-    API for interpolation
+API for interpolation
 
 Author:
 
-    Ken McMillan
+Ken McMillan
 
 Revision History:
 
@@ -45,12 +45,12 @@ using namespace stl_ext;
 // has a destructor: you'll get an address dependency!!!
 namespace stl_ext {
   template <>
-  class hash<Z3_ast> {
-  public:
-    size_t operator()(const Z3_ast p) const {
-      return (size_t) p;
-    }
-  };
+    class hash<Z3_ast> {
+      public:
+        size_t operator()(const Z3_ast p) const {
+          return (size_t) p;
+        }
+    };
 }
 
 typedef interpolation_options_struct *Z3_interpolation_options;
@@ -63,79 +63,155 @@ extern "C" {
     Z3_set_param_value(cfg, "MODEL", "true");
     // Z3_set_param_value(cfg, "PRE_SIMPLIFIER","false");
     // Z3_set_param_value(cfg, "SIMPLIFY_CLAUSES","false");
-    
+
     Z3_context ctx = Z3_mk_context(cfg);
     Z3_del_config(cfg);
     return ctx;
   }
-  
+
   void Z3_interpolate_proof(Z3_context ctx,
-			    Z3_ast proof,
-			    int num,
-			    Z3_ast *cnsts,
-			    unsigned *parents,
-			    Z3_params options,
-			    Z3_ast *interps,
-			    int num_theory,
-			    Z3_ast *theory
-			    ){
+                            Z3_ast proof,
+                            int num,
+                            Z3_ast *cnsts,
+                            unsigned *parents,
+                            Z3_params options,
+                            Z3_ast *interps,
+                            int num_theory,
+                            Z3_ast *theory
+                           ){
 
-      if(num > 1){ // if we have interpolants to compute
-	
-	ptr_vector<ast> pre_cnsts_vec(num);  // get constraints in a vector
-	for(int i = 0; i < num; i++){
-	  ast *a = to_ast(cnsts[i]);
-	  pre_cnsts_vec[i] = a;
-	}
-	
-	::vector<int> pre_parents_vec;  // get parents in a vector
-	if(parents){
-          pre_parents_vec.resize(num);
-	  for(int i = 0; i < num; i++)
-	    pre_parents_vec[i] = parents[i];
-        }
-	
-	ptr_vector<ast> theory_vec; // get background theory in a vector
-	if(theory){
-	  theory_vec.resize(num_theory);
-	  for(int i = 0; i < num_theory; i++)
-	    theory_vec[i] = to_ast(theory[i]);
-	}
-	
-	ptr_vector<ast> interpolants(num-1); // make space for result
-	
-	ast_manager &_m = mk_c(ctx)->m();
-	iz3interpolate(_m,
-		       to_ast(proof),
-		       pre_cnsts_vec,
-		       pre_parents_vec,
-		       interpolants,
-		       theory_vec,
-		       0); // ignore params for now FIXME
+    if(num > 1){ // if we have interpolants to compute
 
-	// copy result back
-	for(unsigned i = 0; i < interpolants.size(); i++){
-	  mk_c(ctx)->save_ast_trail(interpolants[i]);
-	  interps[i] = of_ast(interpolants[i]);
-	  _m.dec_ref(interpolants[i]);
-	}
+      ptr_vector<ast> pre_cnsts_vec(num);  // get constraints in a vector
+      for(int i = 0; i < num; i++){
+        ast *a = to_ast(cnsts[i]);
+        pre_cnsts_vec[i] = a;
       }
+
+      ::vector<int> pre_parents_vec;  // get parents in a vector
+      if(parents){
+        pre_parents_vec.resize(num);
+        for(int i = 0; i < num; i++)
+          pre_parents_vec[i] = parents[i];
+      }
+
+      ptr_vector<ast> theory_vec; // get background theory in a vector
+      if(theory){
+        theory_vec.resize(num_theory);
+        for(int i = 0; i < num_theory; i++)
+          theory_vec[i] = to_ast(theory[i]);
+      }
+
+      ptr_vector<ast> interpolants(num-1); // make space for result
+
+      ast_manager &_m = mk_c(ctx)->m();
+      try {
+      iz3interpolate(_m,
+                     to_ast(proof),
+                     pre_cnsts_vec,
+                     pre_parents_vec,
+                     interpolants,
+                     theory_vec,
+                     0); // ignore params for now FIXME
+      } catch (std::exception& e) {
+          std::cout << e.what () << std::endl;
+          throw e;
+      } catch (char const* s) {
+        std::cout << s << std::endl;
+        throw s;
+      }
+
+      // copy result back
+      for(unsigned i = 0; i < interpolants.size(); i++){
+        mk_c(ctx)->save_ast_trail(interpolants[i]);
+        interps[i] = of_ast(interpolants[i]);
+        _m.dec_ref(interpolants[i]);
+      }
+    }
   }
 
-  Z3_lbool Z3_interpolate(Z3_context ctx,
-			  int num,
-			  Z3_ast *cnsts,
-			  unsigned *parents,
-			  Z3_params options,
-			  Z3_ast *interps,
-			  Z3_model *model,
-			  Z3_literals *labels,
-			  int incremental,
-			  int num_theory,
-                          Z3_ast *theory
-			  ){
 
-    
+  static expr* make_tree(ast_manager &_m, int numExprs, Z3_ast* exprs){
+    if(numExprs == 0)
+      throw cmd_exception("not enough arguments");
+    expr* foo = to_expr(exprs[0]);
+    for(unsigned i = 1; i < numExprs; i++){
+      foo = _m.mk_and(_m.mk_interp(foo),to_expr(exprs[i]));
+    }
+    return foo;
+  }
+
+  void Z3_interpolate2(Z3_context ctx,
+                       int numCnsts,
+                       Z3_ast *cnsts,
+                       int numExprs,
+                       Z3_ast *exprs,
+                       Z3_ast *interps) {
+
+    ast_manager &_m = mk_c(ctx)->m();
+    expr *foo = make_tree(_m,numExprs,exprs);
+    // Get a proof of unsat
+
+    Z3_ast proof;
+    Z3_lbool result;
+
+    profiling::timer_start("Z3 solving");
+    result = Z3_check_assumptions(ctx, 0, 0, 0, &proof, 0, 0);
+    profiling::timer_stop("Z3 solving");
+
+    switch (result) {
+      case Z3_L_FALSE:
+        std::cout << "Z3_L_FALSE\n";
+        break;
+      case Z3_L_UNDEF:
+        std::cout << "Z3_L_UNDEF\n";
+        break;
+      case Z3_L_TRUE:
+        std::cout << "Z3_L_TRUE\n";
+        break;
+    }
+
+
+    ptr_vector<ast> cnstsVec ((unsigned)numCnsts);
+    for (int i = 0; i < numCnsts; i++)
+      cnstsVec[i] = to_ast(cnsts[i]);
+
+    ptr_vector<ast> interpsVec;
+
+    try {
+      printf ("%d %d\n", cnstsVec.size(),interpsVec.size());
+      iz3interpolate(_m,to_ast(proof),cnstsVec,foo,interpsVec,0);
+    }
+    catch (iz3_bad_tree &) {
+      throw cmd_exception("interpolation pattern contains non-asserted formula");
+    }
+    catch (iz3_incompleteness &) {
+      throw cmd_exception("incompleteness in interpolator");
+    }
+
+    printf ("%d\n", interpsVec.size());
+    for (int i = 0; i < interpsVec.size (); i++) {
+      mk_c(ctx)->save_ast_trail(interpsVec[i]);
+      interps[i] = of_ast(interpsVec[i]);
+      _m.dec_ref(interpsVec[i]);
+    }
+  }
+
+
+  Z3_lbool Z3_interpolate(Z3_context ctx,
+                          int num,
+                          Z3_ast *cnsts,
+                          unsigned *parents,
+                          Z3_params options,
+                          Z3_ast *interps,
+                          Z3_model *model,
+                          Z3_literals *labels,
+                          int incremental,
+                          int num_theory,
+                          Z3_ast *theory
+                         ){
+
+
     profiling::timer_start("Solve");
 
     if(!incremental){
@@ -143,13 +219,14 @@ extern "C" {
       profiling::timer_start("Z3 assert");
 
       Z3_push(ctx); // so we can rewind later
-      
-      for(int i = 0; i < num; i++)
-	Z3_assert_cnstr(ctx,cnsts[i]);  // assert all the constraints
+
+      for(int i = 0; i < num; i++) {
+        Z3_assert_cnstr(ctx,cnsts[i]);  // assert all the constraints
+      }
 
       if(theory){
-	for(int i = 0; i < num_theory; i++)
-	  Z3_assert_cnstr(ctx,theory[i]);
+        for(int i = 0; i < num_theory; i++)
+          Z3_assert_cnstr(ctx,theory[i]);
       }
 
       profiling::timer_stop("Z3 assert");
@@ -157,41 +234,40 @@ extern "C" {
 
 
     // Get a proof of unsat
-      
+
     Z3_ast proof;
     Z3_lbool result;
-    
+
     profiling::timer_start("Z3 solving");
     result = Z3_check_assumptions(ctx, 0, 0, model, &proof, 0, 0);
     profiling::timer_stop("Z3 solving");
-    
+
     switch (result) {
-    case Z3_L_FALSE:
-      
-      Z3_interpolate_proof(ctx,
-			   proof,
-			   num,
-			   cnsts,
-			   parents,
-			   options,
-			   interps,
-			   num_theory,
-			   theory);
+      case Z3_L_FALSE:
+        Z3_interpolate_proof(ctx,
+                             proof,
+                             num,
+                             cnsts,
+                             parents,
+                             options,
+                             interps,
+                             num_theory,
+                             theory);
 
-      if(!incremental)
-	for(int i = 0; i < num-1; i++)
-	  Z3_persist_ast(ctx,interps[i],1);
-      break;
-      
-    case Z3_L_UNDEF:
-      if(labels)
-	*labels = Z3_get_relevant_labels(ctx);
-      break;
+        if(!incremental)
+          for(int i = 0; i < num-1; i++)
+            Z3_persist_ast(ctx,interps[i],1);
+        break;
 
-    case Z3_L_TRUE:
-      if(labels)
-	*labels = Z3_get_relevant_labels(ctx);
-      break;
+      case Z3_L_UNDEF:
+        if(labels)
+          *labels = Z3_get_relevant_labels(ctx);
+        break;
+
+      case Z3_L_TRUE:
+        if(labels)
+          *labels = Z3_get_relevant_labels(ctx);
+        break;
     }
 
     profiling::timer_start("Z3 pop");
@@ -204,32 +280,32 @@ extern "C" {
     return result;
 
   }
-  
+
   static std::ostringstream itp_err;
 
-  int Z3_check_interpolant(Z3_context ctx, 
-			    int num, 
-			    Z3_ast *cnsts, 
-			    int *parents,
-			    Z3_ast *itp,
-			    const char **error,
-			    int num_theory,
-			    Z3_ast *theory){
+  int Z3_check_interpolant(Z3_context ctx,
+                           int num,
+                           Z3_ast *cnsts,
+                           int *parents,
+                           Z3_ast *itp,
+                           const char **error,
+                           int num_theory,
+                           Z3_ast *theory){
 
     ast_manager &_m = mk_c(ctx)->m();
     itp_err.clear();
-    
+
     // need a solver -- make one here, but how?
     params_ref p = params_ref::get_empty(); //FIXME
     scoped_ptr<solver_factory> sf(mk_smt_solver_factory());
     scoped_ptr<solver> sp((*(sf))(_m, p, false, true, false, symbol("AUFLIA")));
-    
+
     ptr_vector<ast> cnsts_vec(num);  // get constraints in a vector
     for(int i = 0; i < num; i++){
       ast *a = to_ast(cnsts[i]);
       cnsts_vec[i] = a;
     }
-    
+
     ptr_vector<ast> itp_vec(num);  // get interpolants in a vector
     for(int i = 0; i < num-1; i++){
       ast *a = to_ast(itp[i]);
@@ -240,23 +316,23 @@ extern "C" {
     if(parents){
       parents_vec.resize(num);
       for(int i = 0; i < num; i++)
-	parents_vec[i] = parents[i];
+        parents_vec[i] = parents[i];
     }
-    
+
     ptr_vector<ast> theory_vec; // get background theory in a vector
     if(theory){
       theory_vec.resize(num_theory);
       for(int i = 0; i < num_theory; i++)
-	theory_vec[i] = to_ast(theory[i]);
+        theory_vec[i] = to_ast(theory[i]);
     }
-    
+
     bool res = iz3check(_m,
-			sp.get(),
-			itp_err,
-			cnsts_vec,
-			parents_vec,
-			itp_vec,
-			theory_vec);
+                        sp.get(),
+                        itp_err,
+                        cnsts_vec,
+                        parents_vec,
+                        itp_vec,
+                        theory_vec);
 
     *error = res ? 0 : itp_err.str().c_str();
     return res;
@@ -264,7 +340,7 @@ extern "C" {
 
 
   static std::string Z3_profile_string;
-  
+
   Z3_string Z3_interpolation_profile(Z3_context ctx){
     std::ostringstream f;
     profiling::print(f);
@@ -274,21 +350,21 @@ extern "C" {
 
 
   Z3_interpolation_options
-  Z3_mk_interpolation_options(){
-    return (Z3_interpolation_options) new interpolation_options_struct;
-  }
+    Z3_mk_interpolation_options(){
+      return (Z3_interpolation_options) new interpolation_options_struct;
+    }
 
   void
-  Z3_del_interpolation_options(Z3_interpolation_options opts){
-    delete opts;
-  }
+    Z3_del_interpolation_options(Z3_interpolation_options opts){
+      delete opts;
+    }
 
   void
-  Z3_set_interpolation_option(Z3_interpolation_options opts, 
-			      Z3_string name,
-			      Z3_string value){
-    opts->map[name] = value;
-  }
+    Z3_set_interpolation_option(Z3_interpolation_options opts,
+                                Z3_string name,
+                                Z3_string value){
+      opts->map[name] = value;
+    }
 
 
 
@@ -315,12 +391,12 @@ static void get_file_params(const char *filename, hash_map<std::string,std::stri
       std::vector<std::string> tokens;
       tokenize(first_line.substr(2,first_line.size()-2),tokens);
       for(unsigned i = 0; i < tokens.size(); i++){
-	std::string &tok = tokens[i];
-	size_t eqpos = tok.find('=');
-	if(eqpos >= 0 && eqpos < tok.size()){
-	  std::string left = tok.substr(0,eqpos);
-	  std::string right = tok.substr(eqpos+1,tok.size()-eqpos-1);
-	  params[left] = right;
+        std::string &tok = tokens[i];
+        size_t eqpos = tok.find('=');
+        if(eqpos >= 0 && eqpos < tok.size()){
+          std::string left = tok.substr(0,eqpos);
+          std::string right = tok.substr(eqpos+1,tok.size()-eqpos-1);
+          params[left] = right;
         }
       }
     }
@@ -337,9 +413,9 @@ extern "C" {
     if(num_theory)
       std::copy(theory,theory+num_theory,fmlas.begin());
     for(int i = 0; i < num_theory; i++)
-       fmlas[i] = Z3_mk_implies(ctx,Z3_mk_true(ctx),fmlas[i]);
+      fmlas[i] = Z3_mk_implies(ctx,Z3_mk_true(ctx),fmlas[i]);
     std::copy(cnsts,cnsts+num,fmlas.begin()+num_theory);
-    Z3_string smt = Z3_benchmark_to_smtlib_string(ctx,"none","AUFLIA","unknown","",num_fmlas-1,&fmlas[0],fmlas[num_fmlas-1]);  
+    Z3_string smt = Z3_benchmark_to_smtlib_string(ctx,"none","AUFLIA","unknown","",num_fmlas-1,&fmlas[0],fmlas[num_fmlas-1]);
     std::ofstream f(filename);
     if(num_theory)
       f << ";! THEORY=" << num_theory << "\n";
@@ -375,34 +451,34 @@ extern "C" {
 
 
   static Z3_ast and_vec(Z3_context ctx,svector<Z3_ast> &c){
-      return (c.size() > 1) ? Z3_mk_and(ctx,c.size(),&c[0]) : c[0];
+    return (c.size() > 1) ? Z3_mk_and(ctx,c.size(),&c[0]) : c[0];
   }
-  
+
   static Z3_ast parents_vector_to_tree(Z3_context ctx, int num, Z3_ast *cnsts, int *parents){
     Z3_ast res;
     if(!parents){
       res = Z3_mk_interp(ctx,cnsts[0]);
       for(int i = 1; i < num-1; i++){
-	Z3_ast bar[2] = {res,cnsts[i]};
-	res = Z3_mk_interp(ctx,Z3_mk_and(ctx,2,bar));
+        Z3_ast bar[2] = {res,cnsts[i]};
+        res = Z3_mk_interp(ctx,Z3_mk_and(ctx,2,bar));
       }
       if(num > 1){
-	Z3_ast bar[2] = {res,cnsts[num-1]};
-	res = Z3_mk_and(ctx,2,bar);
+        Z3_ast bar[2] = {res,cnsts[num-1]};
+        res = Z3_mk_and(ctx,2,bar);
       }
     }
     else {
       std::vector<svector<Z3_ast> > chs(num);
       for(int i = 0; i < num-1; i++){
-          svector<Z3_ast> &c = chs[i];
-	c.push_back(cnsts[i]);
-	Z3_ast foo = Z3_mk_interp(ctx,and_vec(ctx,c));
-	chs[parents[i]].push_back(foo);
+        svector<Z3_ast> &c = chs[i];
+        c.push_back(cnsts[i]);
+        Z3_ast foo = Z3_mk_interp(ctx,and_vec(ctx,c));
+        chs[parents[i]].push_back(foo);
       }
       {
-	svector<Z3_ast> &c = chs[num-1];
-	c.push_back(cnsts[num-1]);
-	res = and_vec(ctx,c);
+        svector<Z3_ast> &c = chs[num-1];
+        c.push_back(cnsts[num-1]);
+        res = and_vec(ctx,c);
       }
     }
     Z3_inc_ref(ctx,res);
@@ -414,22 +490,22 @@ extern "C" {
     if(num >  0){
       ptr_vector<expr> cnsts_vec(num);  // get constraints in a vector
       for(int i = 0; i < num; i++){
-	expr *a = to_expr(cnsts[i]);
-	cnsts_vec[i] = a;
+        expr *a = to_expr(cnsts[i]);
+        cnsts_vec[i] = a;
       }
       Z3_ast tree = parents_vector_to_tree(ctx,num,cnsts,parents);
       for(int i = 0; i < num_theory; i++){
-	expr *a = to_expr(theory[i]);
-	cnsts_vec.push_back(a);
+        expr *a = to_expr(theory[i]);
+        cnsts_vec.push_back(a);
       }
       iz3pp(mk_c(ctx)->m(),cnsts_vec,to_expr(tree),f);
       Z3_dec_ref(ctx,tree);
     }
     f.close();
 
-#if 0    
+#if 0
 
-    
+
     if(!parents){
       iZ3_write_seq(ctx,num,cnsts,filename,num_theory,theory);
       return;
@@ -470,26 +546,26 @@ extern "C" {
     try {
       std::string foo(filename);
       if(foo.size() >= 5 && foo.substr(foo.size()-5) == ".smt2"){
-	Z3_ast ass = Z3_parse_smtlib2_file(ctx, filename, 0, 0, 0, 0, 0, 0);
-	Z3_app app = Z3_to_app(ctx,ass);
-	int nconjs = Z3_get_app_num_args(ctx,app);
-	assertions.resize(nconjs);
-	for(int k = 0; k < nconjs; k++)
-	  assertions[k] = Z3_get_app_arg(ctx,app,k);
+        Z3_ast ass = Z3_parse_smtlib2_file(ctx, filename, 0, 0, 0, 0, 0, 0);
+        Z3_app app = Z3_to_app(ctx,ass);
+        int nconjs = Z3_get_app_num_args(ctx,app);
+        assertions.resize(nconjs);
+        for(int k = 0; k < nconjs; k++)
+          assertions[k] = Z3_get_app_arg(ctx,app,k);
       }
       else {
-	Z3_parse_smtlib_file(ctx, filename, 0, 0, 0, 0, 0, 0);
-	int numa = Z3_get_smtlib_num_assumptions(ctx);
-	int numf = Z3_get_smtlib_num_formulas(ctx);
-	int num = numa + numf;
-	
-	assertions.resize(num);
-	for(int j = 0; j < num; j++){
-	  if(j < numa)
-	    assertions[j] = Z3_get_smtlib_assumption(ctx,j);
-	  else
-	    assertions[j] = Z3_get_smtlib_formula(ctx,j-numa);
-	}
+        Z3_parse_smtlib_file(ctx, filename, 0, 0, 0, 0, 0, 0);
+        int numa = Z3_get_smtlib_num_assumptions(ctx);
+        int numf = Z3_get_smtlib_num_formulas(ctx);
+        int num = numa + numf;
+
+        assertions.resize(num);
+        for(int j = 0; j < num; j++){
+          if(j < numa)
+            assertions[j] = Z3_get_smtlib_assumption(ctx,j);
+          else
+            assertions[j] = Z3_get_smtlib_formula(ctx,j-numa);
+        }
       }
     }
     catch(...) {
@@ -501,13 +577,13 @@ extern "C" {
     Z3_set_error_handler(ctx, 0);
     return true;
   }
-  
+
 
   int Z3_read_interpolation_problem(Z3_context ctx, int *_num, Z3_ast **cnsts, int **parents, const char *filename, const char **error, int *ret_num_theory, Z3_ast **theory ){
 
     hash_map<std::string,std::string> file_params;
     get_file_params(filename,file_params);
-    
+
     unsigned num_theory = 0;
     if(file_params.find("THEORY") != file_params.end())
       num_theory = atoi(file_params["THEORY"].c_str());
@@ -515,9 +591,9 @@ extern "C" {
     svector<Z3_ast> assertions;
     if(!iZ3_parse(ctx,filename,error,assertions))
       return false;
-    
+
     if(num_theory > assertions.size())
-        num_theory = assertions.size();
+      num_theory = assertions.size();
     unsigned num = assertions.size() - num_theory;
 
     read_cnsts.resize(num);
@@ -528,7 +604,7 @@ extern "C" {
       read_theory[j] = assertions[j];
     for(unsigned j = 0; j < num; j++)
       read_cnsts[j] = assertions[j+num_theory];
-    
+
     if(ret_num_theory)
       *ret_num_theory = num_theory;
     if(theory)
@@ -542,7 +618,7 @@ extern "C" {
 
     for(unsigned j = 0; j < num; j++)
       read_parents[j] = SHRT_MAX;
-    
+
     hash_map<Z3_ast,int> pred_map;
 
     for(unsigned j = 0; j < num; j++){
@@ -550,15 +626,15 @@ extern "C" {
 
       if(Z3_get_decl_kind(ctx,Z3_get_app_decl(ctx,Z3_to_app(ctx,rhs))) == Z3_OP_IMPLIES){
         Z3_app app1 = Z3_to_app(ctx,rhs);
-	Z3_ast lhs1 = Z3_get_app_arg(ctx,app1,0);
-	Z3_ast rhs1 = Z3_get_app_arg(ctx,app1,1);
-	if(Z3_get_decl_kind(ctx,Z3_get_app_decl(ctx,Z3_to_app(ctx,lhs1))) == Z3_OP_AND){
-	  Z3_app app2 = Z3_to_app(ctx,lhs1);
-	  int nconjs = Z3_get_app_num_args(ctx,app2);
-	  for(int k = nconjs - 1; k >= 0; --k)
-	    rhs1 = Z3_mk_implies(ctx,Z3_get_app_arg(ctx,app2,k),rhs1);
-	  rhs = rhs1;
-	}
+        Z3_ast lhs1 = Z3_get_app_arg(ctx,app1,0);
+        Z3_ast rhs1 = Z3_get_app_arg(ctx,app1,1);
+        if(Z3_get_decl_kind(ctx,Z3_get_app_decl(ctx,Z3_to_app(ctx,lhs1))) == Z3_OP_AND){
+          Z3_app app2 = Z3_to_app(ctx,lhs1);
+          int nconjs = Z3_get_app_num_args(ctx,app2);
+          for(int k = nconjs - 1; k >= 0; --k)
+            rhs1 = Z3_mk_implies(ctx,Z3_get_app_arg(ctx,app2,k),rhs1);
+          rhs = rhs1;
+        }
       }
 
       while(1){
@@ -566,54 +642,54 @@ extern "C" {
         Z3_func_decl func = Z3_get_app_decl(ctx,app);
         Z3_decl_kind dk = Z3_get_decl_kind(ctx,func);
         if(dk == Z3_OP_IMPLIES){
-	  if(lhs){
-	    Z3_ast child = lhs;
-	    if(pred_map.find(child) == pred_map.end()){
-	      read_error << "formula " << j+1 << ": unknown: " << Z3_ast_to_string(ctx,child);
-	      goto fail;
-	    }
-	    int child_num = pred_map[child];
-	    if(read_parents[child_num] != SHRT_MAX){
-	      read_error << "formula " << j+1 << ": multiple reference: " << Z3_ast_to_string(ctx,child);
-	      goto fail;
-	    }
-	    read_parents[child_num] = j;
-	  }
-	  lhs = Z3_get_app_arg(ctx,app,0);
+          if(lhs){
+            Z3_ast child = lhs;
+            if(pred_map.find(child) == pred_map.end()){
+              read_error << "formula " << j+1 << ": unknown: " << Z3_ast_to_string(ctx,child);
+              goto fail;
+            }
+            int child_num = pred_map[child];
+            if(read_parents[child_num] != SHRT_MAX){
+              read_error << "formula " << j+1 << ": multiple reference: " << Z3_ast_to_string(ctx,child);
+              goto fail;
+            }
+            read_parents[child_num] = j;
+          }
+          lhs = Z3_get_app_arg(ctx,app,0);
           rhs = Z3_get_app_arg(ctx,app,1);
-	}
-	else {
-	  if(!lhs){
-	    read_error << "formula " << j+1 << ": should be (implies {children} fmla parent)";
-	    goto fail;
-	  }
-	  read_cnsts[j] = lhs;
-	  Z3_ast name = rhs;
-	  if(pred_map.find(name) != pred_map.end()){
-	    read_error << "formula " << j+1 << ": duplicate symbol";
-	    goto fail;
-	  }
-	  pred_map[name] = j;
+        }
+        else {
+          if(!lhs){
+            read_error << "formula " << j+1 << ": should be (implies {children} fmla parent)";
+            goto fail;
+          }
+          read_cnsts[j] = lhs;
+          Z3_ast name = rhs;
+          if(pred_map.find(name) != pred_map.end()){
+            read_error << "formula " << j+1 << ": duplicate symbol";
+            goto fail;
+          }
+          pred_map[name] = j;
           break;
-	}
+        }
       }
     }
 
     for(unsigned j = 0; j < num-1; j++)
       if(read_parents[j] == SHRT_MIN){
-	read_error << "formula " << j+1 << ": unreferenced";
-	goto fail;
+        read_error << "formula " << j+1 << ": unreferenced";
+        goto fail;
       }
-    
+
     *_num = num;
     *cnsts = &read_cnsts[0];
     *parents = &read_parents[0];
     return true;
-    
-  fail:
+
+fail:
     read_msg = read_error.str();
     *error = read_msg.c_str();
     return false;
-    
+
   }
 }
