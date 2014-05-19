@@ -159,18 +159,6 @@ extern "C" {
     result = Z3_check_assumptions(ctx, 0, 0, 0, &proof, 0, 0);
     profiling::timer_stop("Z3 solving");
 
-    switch (result) {
-      case Z3_L_FALSE:
-        std::cout << "Z3_L_FALSE\n";
-        break;
-      case Z3_L_UNDEF:
-        std::cout << "Z3_L_UNDEF\n";
-        break;
-      case Z3_L_TRUE:
-        std::cout << "Z3_L_TRUE\n";
-        break;
-    }
-
 
     ptr_vector<ast> cnstsVec ((unsigned)numCnsts);
     for (int i = 0; i < numCnsts; i++)
@@ -179,7 +167,6 @@ extern "C" {
     ptr_vector<ast> interpsVec;
 
     try {
-      printf ("%d %d\n", cnstsVec.size(),interpsVec.size());
       iz3interpolate(_m,to_ast(proof),cnstsVec,foo,interpsVec,0);
     }
     catch (iz3_bad_tree &) {
@@ -189,7 +176,6 @@ extern "C" {
       throw cmd_exception("incompleteness in interpolator");
     }
 
-    printf ("%d\n", interpsVec.size());
     for (int i = 0; i < interpsVec.size (); i++) {
       mk_c(ctx)->save_ast_trail(interpsVec[i]);
       interps[i] = of_ast(interpsVec[i]);
